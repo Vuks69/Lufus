@@ -2,6 +2,7 @@ import sys
 import json
 import urllib.parse
 import webbrowser
+from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QGridLayout, QLabel, QComboBox, 
                              QPushButton, QProgressBar, QCheckBox, 
@@ -9,7 +10,13 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QLineEdit, QFrame, QStatusBar, QToolButton, QSpacerItem)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
-import states
+
+# gets imports from /drives
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from src.drives import states
+
 
 class LogWindow(QDialog):
     def __init__(self):
