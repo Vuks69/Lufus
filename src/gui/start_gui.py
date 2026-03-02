@@ -12,7 +12,7 @@ def launch_gui_with_usb_data() -> None:
     encoded_data = urllib.parse.quote(usb_json)
 
     try:
-        subprocess.run([sys.executable, "src/gui/gui.py", encoded_data], check=True)
+        subprocess.run([sys.executable, "src/drives/gui.py", encoded_data], check=True)
     except FileNotFoundError as e:
         print(f"Failed to launch GUI: executable or script not found: {e}")
         sys.exit(1)
