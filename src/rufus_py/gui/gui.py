@@ -322,6 +322,7 @@ class Rufus(QMainWindow):
         lbl_image.setStyleSheet("font-weight: normal; font-size: 9pt; padding-bottom: 2px;")
         self.combo_image_option = QComboBox()
         self.combo_image_option.addItem("Standard Windows installation")
+        #self.combo_image_option.addItem("Windows To Go")
         self.combo_image_option.addItem("Standard Linux")
         self.combo_image_option.currentTextChanged.connect(self.update_image_option)
 
@@ -539,6 +540,7 @@ class Rufus(QMainWindow):
     def update_image_option(self):
         states.image_option = self.combo_image_option.currentText()
         self._update_filesystem_options()
+        # print(f"Global state updated to: {states.image_option}")
     
     def _update_filesystem_options(self):
         self.combo_fs.blockSignals(True)
@@ -557,12 +559,14 @@ class Rufus(QMainWindow):
 
     def update_target_system(self):
         states.target_system = self.combo_target.currentIndex()
+        # print(f"Global state updated to: {states.target_system}")
     
     def update_new_label(self, current_text):
         states.new_label = current_text
     
     def update_cluster_size(self):
         states.cluster_size = self.combo_cluster.currentIndex()
+        # print(f"Global state updated to: {states.cluster_size}")
 
     def update_QF(self):
         states.QF = 0 if self.chk_quick.isChecked() else 1
