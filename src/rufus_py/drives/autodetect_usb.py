@@ -25,8 +25,8 @@ class UsbMonitor(QObject):
         for device in self.context.list_devices(subsystem='block', DEVTYPE='disk'):
             if device.get('ID_BUS') == 'usb':
                 node = device.device_node
-                self.devices[node] = node
-                
+                label = device.get('ID_FS_LABEL') or device.get('ID_MODEL') or node
+                self.devices[node] = label
         self.device_list_updated.emit(self.devices)
         
     def _event(self, device):
@@ -37,9 +37,11 @@ class UsbMonitor(QObject):
             return
         
         node = device.device_node
+        action = device.action
         
         if action == "add":
-            self.devices[node] = node
+            label = device.get('ID_FS_LABEL') or device.get('ID_MODEL') or node
+            self.devices[node] = label
             self.device_added.emit(node)
         elif action == "remove":
             if node in self.devices:
