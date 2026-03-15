@@ -46,40 +46,7 @@ from PyQt6.QtGui import QFont, QFontDatabase
 from lufus.drives import states
 from lufus.drives.autodetect_usb import UsbMonitor
 
-def _find_resource_dir(name: str) -> Path | None:
-    """Locate a bundled resource directory (e.g. 'themes', 'languages').
-
-    Checks in order:
-      1. Beside this source file — normal editable / pip install layout.
-      2. PyInstaller _MEIPASS bundle.
-      3. $APPDIR (AppImage mount root) under usr/share/lufus/<name>.
-      4. $APPDIR directly under <name>.
-      5. Beside the running executable / entry-point script.
-    Returns the first existing directory, or None if not found.
-    """
-    candidates: list[Path] = []
-
-    candidates.append(Path(__file__).resolve().parent / name)
-    candidates.append(Path(__file__).resolve().parent.parent / name)
-
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        candidates.append(Path(meipass) / name)
-
-    appdir = os.environ.get("APPDIR", "")
-    if appdir:
-        candidates.append(Path(appdir) / "usr" / "share" / "lufus" / name)
-        candidates.append(Path(appdir) / name)
-
-    for base in (sys.executable, sys.argv[0]):
-        if base:
-            candidates.append(Path(base).resolve().parent / name)
-            candidates.append(Path(base).resolve().parent.parent / name)
-
-    for p in candidates:
-        if p.is_dir():
-            return p
-    return None
+THEME_DIR = Path(__file__).parent / 'themes'
 
 class Scale:
     BASE_DPI = 80.0
@@ -429,7 +396,7 @@ class VerifyWorker(QThread):
             self.verify_done.emit(result)
         except Exception as e:
             self.progress.emit(f"Verification error: {str(e)}")
-            self.verify_done.emit(False)
+            self.flash_done.emit(False)
 
 
 class FlashWorker(QThread):
@@ -447,6 +414,7 @@ class FlashWorker(QThread):
         try:
             from lufus.drives import states, formatting as fo
             from lufus.writing.flash_usb import FlashUSB
+            from lufus.writing.flash_woeusb import flash_woeusb
             import glob
 
             options = self.options
@@ -454,7 +422,8 @@ class FlashWorker(QThread):
                 setattr(states, key, value)
 
             device_node = options["device"]
-            iso_path = options.get("iso_path", "")
+            iso_path = options["iso_path"]
+            flash_mode = options["currentflash"]
             image_option = options["image_option"]
 
             self.status.emit(f"Unmounting all partitions on {device_node}...")
@@ -463,17 +432,18 @@ class FlashWorker(QThread):
                 self.status.emit(f"Unmounting {part}...")
                 fo.unmount(part)
 
-            if image_option == 4:  # Ventoy
-                from lufus.writing.install_ventoy import install_grub
-                self.status.emit("Starting Ventoy installation...")
-                self.progress.emit(5)
-                success = install_grub(device_node)
-                if success:
-                    self.progress.emit(100)
-                    self.status.emit("Ventoy installation complete")
+            if image_option == 0:
+                if flash_mode == 0:
+                    success = FlashUSB(iso_path, device_node,
+                                       progress_cb=self.progress.emit,
+                                       status_cb=self.status.emit)
+                elif flash_mode == 1:
+                    success = flash_woeusb(device_node, iso_path,
+                                           progress_cb=self.progress.emit,
+                                           status_cb=self.status.emit)
                 else:
-                    self.status.emit("Ventoy installation failed")
-            else:  # Windows / Linux / Other / Format Only
+                    success = False
+            else:
                 success = FlashUSB(iso_path, device_node,
                                    progress_cb=self.progress.emit,
                                    status_cb=self.status.emit)
@@ -484,7 +454,6 @@ class FlashWorker(QThread):
             self.flash_done.emit(False)
         finally:
             sys.stdout = _saved_stdout
-
 
 
 class lufus(QMainWindow):
@@ -548,44 +517,28 @@ class lufus(QMainWindow):
         self.log_message(
             f"Startup USB devices passed in: {list((usb_devices or {}).keys()) or 'none'}"
         )
+        self.flash_worker = None
         self.log_message(f"UI scale factor: {self._S.f():.3f}  (base 96 DPI)")
-
-        # If re-launched as root via pkexec with serialised flash options, auto-start
-        self._autoflash_path = None
-        for i, arg in enumerate(sys.argv):
-            if arg == "--flash-now" and i + 1 < len(sys.argv):
-                self._autoflash_path = sys.argv[i + 1]
-                break
-        if self._autoflash_path:
-            QTimer.singleShot(150, self._do_autoflash)
 
     def _apply_styles(self) -> None:
         """load json values, apply via .qss, all that yap is in the themes folder :3"""
         S = self._S
         APP_NAME = "Lufus"
 
-        theme_dir = _find_resource_dir('themes')
-        if theme_dir is None:
-            print("WARNING: themes directory not found, applying minimal fallback style.")
-            self._apply_fallback_style()
-            return
+        theme_dir = Path(__file__).parent / 'themes'
         default_theme_path = theme_dir / 'default_theme.json'
         template_path = theme_dir / 'style_template.qss'
 
         user_config_dir_path = Path(user_config_dir(APP_NAME, roaming=True))
         user_theme_path = user_config_path = user_config_dir_path / 'user_theme.json'
+        
 
         try:
             with open(default_theme_path, 'r', encoding='utf-8') as fr:
                 theme = json.load(fr)
-        except FileNotFoundError:
-            print("WARNING: default_theme.json not found, applying minimal fallback style.")
-            self._apply_fallback_style()
-            return
-        except Exception as e:
-            print(f"WARNING: could not load theme json: {e}, applying minimal fallback style.")
-            self._apply_fallback_style()
-            return
+        except FileNotFoundError as e:
+            # Fallback if this doesn't bother to work... -_-
+            print("WARNING: no theme applied, json didn't load up in _apply_styles, gui.py.")
 
         if os.path.exists(user_theme_path):
             try:
@@ -609,7 +562,7 @@ class lufus(QMainWindow):
         for key, value in theme['dimensions'].items():
             scaled_theme['dimensions'][key] = S.px(value)
 
-        flat_theme = {}
+        flat_theme: Dict[str, Any] = {}
         for category, subdict in scaled_theme.items():
             for key, val in subdict.items():
                 flat_theme[f"{category}_{key}"] = val
@@ -622,22 +575,7 @@ class lufus(QMainWindow):
             return
 
         style_sheet = template.format(**flat_theme)
-
-        QApplication.instance().setStyleSheet(style_sheet)
-
-    def _apply_fallback_style(self) -> None:
-        """Minimal palette-safe stylesheet used when the themes directory is missing."""
-        QApplication.instance().setStyleSheet(
-            "QComboBox { color: palette(text); background-color: palette(base); }"
-            "QComboBox QAbstractItemView { color: palette(text); background-color: palette(base); }"
-            "QLineEdit { color: palette(text); background-color: palette(base); }"
-            "QLabel { color: palette(text); }"
-            "QCheckBox { color: palette(text); }"
-            "QProgressBar { color: palette(text); }"
-            "QStatusBar { color: palette(text); }"
-            "QScrollArea { background-color: palette(window); }"
-            "QScrollArea > QWidget > QWidget { background-color: palette(window); }"
-        )
+        self.setStyleSheet(style_sheet)
 
     def create_header(self, text):
         layout = QHBoxLayout()
@@ -1382,33 +1320,31 @@ class lufus(QMainWindow):
             self.progress_bar.setValue(0)
             self.progress_bar.setFormat("")
 
-    def _build_flash_options(self) -> dict:
-        return {
-            "iso_path":       getattr(states, "iso_path", ""),
-            "device":         self.combo_device.currentData() or "",
-            "image_option":   getattr(states, "image_option", 0),
-            "currentflash":   getattr(states, "currentflash", 0),
-            "currentFS":      getattr(states, "currentFS", 0),
-            "partition_scheme": getattr(states, "partition_scheme", 0),
-            "target_system":  getattr(states, "target_system", 0),
-            "cluster_size":   getattr(states, "cluster_size", 0),
-            "QF":             getattr(states, "QF", 0),
-            "create_extended": getattr(states, "create_extended", 0),
-            "check_bad":      getattr(states, "check_bad", 0),
-            "new_label":      getattr(states, "new_label", ""),
-            "verify_hash":    getattr(states, "verify_hash", False),
-            "expected_hash":  getattr(states, "expected_hash", ""),
+    def perform_flash(self):
+        options = {
+            "iso_path": states.iso_path,
+            "device": self.get_selected_mount_path(),
+            "image_option": states.image_option,
+            "currentflash": states.currentflash,
+            "currentFS": states.currentFS,
+            "partition_scheme": states.partition_scheme,
+            "target_system": states.target_system,
+            "cluster_size": states.cluster_size,
+            "QF": states.QF,
+            "create_extended": states.create_extended,
+            "check_bad": states.check_bad,
+            "new_label": states.new_label,
+            "verify_hash": states.verify_hash,
+            "expected_hash": states.expected_hash,
         }
 
-    def _relaunch_as_root(self, options: dict) -> None:
-        """Serialize flash options and re-exec this process via pkexec as root.
+        self.log_message(f"Starting flash thread: image_option={options['image_option']}, flash_mode={options['currentflash']}, device={options['device']}")
 
-        The relaunched root instance will detect --flash-now and auto-start the
-        flash without showing an extra dialog.
-        """
-        fd, opts_path = tempfile.mkstemp(suffix=".json", prefix="lufus_flash_")
-        with os.fdopen(fd, "w") as f:
-            json.dump(options, f)
+        self.flash_worker = FlashWorker(options)
+        self.flash_worker.progress.connect(self.progress_bar.setValue, Qt.ConnectionType.QueuedConnection)
+        self.flash_worker.status.connect(self._on_flash_status, Qt.ConnectionType.QueuedConnection)
+        self.flash_worker.flash_done.connect(self.on_flash_finished, Qt.ConnectionType.QueuedConnection)
+        self.flash_worker.start()
 
         # Preserve display/session variables so the root GUI can render
         gui_env = {
@@ -1471,18 +1407,6 @@ class lufus(QMainWindow):
         self.btn_cancel.setEnabled(True)
         self.progress_bar.setValue(0)
         self.statusBar.showMessage(self._T.get("status_flashing", "Flashing..."), 0)
-
-    def perform_flash(self):
-        options = self._build_flash_options()
-        self.log_message(f"Starting flash: image_option={options['image_option']}, flash_mode={options['currentflash']}, device={options['device']}")
-
-        if os.geteuid() != 0:
-            # Not root — re-exec the whole app via pkexec with serialised options.
-            # The relaunched root instance will auto-start the flash.
-            self._relaunch_as_root(options)
-            return  # os.execvp replaces this process; this line is never reached
-
-        self._start_flash_with_options(options)
     
     def _on_flash_status(self, msg):
         self.log_message(msg)

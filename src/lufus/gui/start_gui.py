@@ -25,14 +25,11 @@ def ensure_root():
         executable = appimage if appimage else sys.executable
         cmd = ["pkexec"] + env_args + [executable] + (sys.argv[1:] if appimage else sys.argv)
         os.execvp("pkexec", cmd)
-
+usb_devices = find_usb()
 
 def launch_gui_with_usb_data() -> None:
-    # Skip USB scan when auto-flashing as root — the device is already in the options
-    if "--flash-now" in sys.argv:
-        usb_devices = {}
-    else:
-        usb_devices = find_usb()
+    ensure_root()
+    #usb_devices = find_usb()
     #print("Detected USB devices:", usb_devices)
 
     from PyQt6.QtWidgets import QApplication
