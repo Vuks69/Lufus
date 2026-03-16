@@ -1,6 +1,9 @@
 import psutil
 import os
 import subprocess
+from lufus.lufus_logging import get_logger
+
+log = get_logger(__name__)
 
 
 def GetUSBInfo(usb_path: str) -> dict:
@@ -12,7 +15,7 @@ def GetUSBInfo(usb_path: str) -> dict:
                 device_node = part.device
                 break
         else:
-            print(f"Could not find device node for USB path: {usb_path}")
+            log.warning("Could not find device node for USB path: %s", usb_path)
             return {}
 
         size_output = subprocess.check_output(
@@ -23,10 +26,12 @@ def GetUSBInfo(usb_path: str) -> dict:
 
         usb_size = int(size_output) if size_output.isdigit() else 0
         if not size_output.isdigit():
-            print(f"Warning: could not parse device size: {size_output!r}")
+            log.warning("Could not parse device size: %r", size_output)
 
         if usb_size > 32 * 1024**3:
-            print(f"USB device is large ({usb_size} bytes); confirm before flashing.")
+            log.warning(
+                "USB device is large (%d bytes); confirm before flashing.", usb_size
+            )
 
         label = subprocess.check_output(
             ["lsblk", "-d", "-n", "-o", "LABEL", device_node], text=True, timeout=5
@@ -39,17 +44,17 @@ def GetUSBInfo(usb_path: str) -> dict:
             "label": label,
             "mount_path": normalized_usb_path,
         }
-        print(f"USB Info: {usb_info}")
+        log.info("USB Info: %s", usb_info)
         return usb_info
     except subprocess.TimeoutExpired as e:
-        print(f"Timed out getting USB info for {usb_path}: {e}")
+        log.error("Timed out getting USB info for %s: %s", usb_path, e)
         return {}
     except PermissionError:
-        print(f"Permission denied when trying to get USB info: {usb_path}")
+        log.error("Permission denied when trying to get USB info: %s", usb_path)
         return {}
     except subprocess.CalledProcessError as e:
-        print(f"Error getting USB info: {e}")
+        log.error("Error getting USB info: %s", e)
         return {}
     except Exception as err:
-        print(f"Unexpected error getting USB info: {err}")
+        log.error("Unexpected error getting USB info: %s", err)
         return {}
