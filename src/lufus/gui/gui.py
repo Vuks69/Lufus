@@ -492,7 +492,7 @@ class VerifyWorker(QThread):
             self.verify_done.emit(result)
         except Exception as e:
             self.progress.emit(f"Verification error: {str(e)}")
-            self.flash_done.emit(False)
+            self.verify_done.emit(False)
 
 
 class FlashWorker(QThread):
@@ -521,7 +521,7 @@ class FlashWorker(QThread):
                 setattr(states, key, value)
 
             device_node = options["device"]
-            iso_path = options["iso_path"]
+            iso_path = options.get("iso_path", "")
             flash_mode = options["currentflash"]
             image_option = options["image_option"]
 
@@ -529,11 +529,35 @@ class FlashWorker(QThread):
             self.status.emit(f"Unmounting all partitions on {device_node}...")
             partitions = glob.glob(f"{device_node}*")
             for part in partitions:
-                self.status.emit(f"Unmounting {part}...")
-                fo.unmount(part)
+                if part != device_node:  # don't unmount the device itself
+                    self.status.emit(f"Unmounting {part}...")
+                    fo.unmount(part)
 
-            # perform flash based on mode
-            if image_option == 0:
+            # perform operation based on image option
+            if image_option == 3:  # Format Only
+                self.status.emit("Starting format operation...")
+                self.progress.emit(10)
+                
+                # Check for bad blocks if enabled
+                if options.get("check_bad", 1) == 0:  # 0 means enabled
+                    self.status.emit("Checking for bad blocks...")
+                    self.progress.emit(20)
+                    bad_blocks_ok = fo.checkdevicebadblock()
+                    if not bad_blocks_ok:
+                        self.status.emit("Bad blocks detected!")
+                        self.flash_done.emit(False)
+                        return
+                    self.progress.emit(40)
+                
+                # Format the drive
+                self.status.emit("Formatting drive...")
+                self.progress.emit(50)
+                fo.dskformat()
+                self.progress.emit(100)
+                self.status.emit("Format complete!")
+                success = True
+                
+            elif image_option == 0:  # Windows
                 if flash_mode == 0:
                     # iso mode for microslop windows
                     success = FlashUSB(iso_path, device_node,
@@ -542,7 +566,7 @@ class FlashWorker(QThread):
                 else:
                     success = False
             else:
-                # other flash modes
+                # other flash modes (Linux, Other)
                 success = FlashUSB(iso_path, device_node,
                                    progress_cb=self.progress.emit,
                                    status_cb=self.status.emit)
@@ -1581,21 +1605,13 @@ class lufus(QMainWindow):
                                     self._T.get("msgbox_no_image_body", "Please select an image file"))
                 return
 
-            # validate device selected :3
-            device_node = self.get_selected_mount_path()
-            if not device_node:
-                self.log_message("Start aborted: no USB device selected", level="WARN")
-                QMessageBox.warning(self, self._T.get("msgbox_no_device_title", "No Device"),
-                                    self._T.get("msgbox_no_device_body", "Please select a USB device"))
-                return
-
-        elif states.image_option == 4:  # ventoy no iso required but device is :D
-            device_node = self.get_selected_mount_path()
-            if not device_node:
-                self.log_message("Start aborted: no USB device selected", level="WARN")
-                QMessageBox.warning(self, self._T.get("msgbox_no_device_title", "No Device"),
-                                    self._T.get("msgbox_no_device_body", "Please select a USB device"))
-                return
+        # validate device selected for all modes except ventoy (might be handled differently)
+        device_node = self.get_selected_mount_path()
+        if not device_node:
+            self.log_message("Start aborted: no USB device selected", level="WARN")
+            QMessageBox.warning(self, self._T.get("msgbox_no_device_title", "No Device"),
+                                self._T.get("msgbox_no_device_body", "Please select a USB device"))
+            return
 
         if states.image_option in [0, 1, 2] and states.verify_hash:
             # validate sha256 hash format
